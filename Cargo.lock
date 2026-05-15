@@ -334,7 +334,7 @@ dependencies = [
 [[package]]
 name = "ironworks"
 version = "0.4.1"
-source = "git+https://github.com/zhyupe/ironworks.git#a9b40991b80f7466c2acdfbbe288e4f524a0301a"
+source = "git+https://github.com/zhyupe/ironworks.git?rev=f6dd285#f6dd2853cc22a552a21fcf4e5df8f839270daa33"
 dependencies = [
  "binrw",
  "derivative",
