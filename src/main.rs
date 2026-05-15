@@ -12,6 +12,7 @@ use std::{
 		mpsc,
 	},
 	thread,
+	time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -28,6 +29,7 @@ use crate::{
 };
 
 fn main() -> Result<()> {
+	let started_at = Instant::now();
 	let options = parse_options()?;
 	let install_root = resolve_install_root(options.install_root)
 		.context("could not determine FFXIV install path from the provided path, current working directory, or known global install paths")?;
@@ -130,6 +132,7 @@ fn main() -> Result<()> {
 
 	println!("archive: {}", archive_path.display());
 	println!("mapping: {}", mapping_path.display());
+	println!("elapsed: {}", format_elapsed(started_at.elapsed()));
 
 	Ok(())
 }
@@ -149,5 +152,21 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> &str {
 		message.as_str()
 	} else {
 		"unknown panic payload"
+	}
+}
+
+fn format_elapsed(duration: Duration) -> String {
+	let total_seconds = duration.as_secs();
+	let hours = total_seconds / 3600;
+	let minutes = (total_seconds % 3600) / 60;
+	let seconds = total_seconds % 60;
+	let milliseconds = duration.subsec_millis();
+
+	if hours > 0 {
+		format!("{hours}h {minutes}m {seconds}.{milliseconds:03}s")
+	} else if minutes > 0 {
+		format!("{minutes}m {seconds}.{milliseconds:03}s")
+	} else {
+		format!("{seconds}.{milliseconds:03}s")
 	}
 }
