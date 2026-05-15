@@ -23,19 +23,20 @@ use ironworks::{
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
-	config::{END_ID_EXCLUSIVE, START_ID, output_root, resolve_install_root},
+	config::{END_ID_EXCLUSIVE, START_ID, output_root, parse_options, resolve_install_root},
 	export::{ArchiveWriter, new_deduper, process_id},
 };
 
 fn main() -> Result<()> {
-	let install_root = resolve_install_root()
-		.context("could not determine FFXIV install path from argv[1], current working directory, or known global install paths")?;
+	let options = parse_options()?;
+	let install_root = resolve_install_root(options.install_root)
+		.context("could not determine FFXIV install path from the provided path, current working directory, or known global install paths")?;
 
 	let ui_output_dir = output_root();
 	fs::create_dir_all(&ui_output_dir)
 		.with_context(|| format!("create output dir {}", ui_output_dir.display()))?;
 
-	let archive_path = ui_output_dir.join("icons.zip");
+	let archive_path = ui_output_dir.join(options.output_format.archive_name());
 	let mapping_path = ui_output_dir.join("icon-path-sha256.json");
 
 	if archive_path.exists() {
@@ -59,7 +60,7 @@ fn main() -> Result<()> {
 		.progress_chars("=>-"),
 	);
 
-	let mut archive = ArchiveWriter::new(zip, zip_options);
+	let mut archive = ArchiveWriter::new(zip, zip_options, options.output_format);
 	let worker_count = thread::available_parallelism()
 		.map(|parallelism| parallelism.get())
 		.unwrap_or(1);
@@ -72,6 +73,7 @@ fn main() -> Result<()> {
 		let install_root = install_root.clone();
 		let next_id = Arc::clone(&next_id);
 		let deduper = Arc::clone(&deduper);
+		let output_format = options.output_format;
 		let sender = sender.clone();
 
 		workers.push(thread::spawn(move || {
@@ -83,7 +85,10 @@ fn main() -> Result<()> {
 					break;
 				}
 
-				if sender.send(process_id(&ironworks, &deduper, id)).is_err() {
+				if sender
+					.send(process_id(&ironworks, &deduper, output_format, id))
+					.is_err()
+				{
 					break;
 				}
 			}

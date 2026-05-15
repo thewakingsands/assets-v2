@@ -11,7 +11,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use zip::{ZipWriter, write::SimpleFileOptions};
 
-use crate::{config::VERSIONS, tex::convert_tex_to_webp};
+use crate::{
+	config::{OutputFormat, VERSIONS},
+	tex::convert_tex,
+};
 
 #[derive(Debug, Serialize)]
 pub struct MappingEntry {
@@ -40,7 +43,7 @@ impl ExportStats {
 
 pub struct ArchiveEntry {
 	sha256: String,
-	webp: Vec<u8>,
+	data: Vec<u8>,
 }
 
 pub struct IdOutput {
@@ -59,15 +62,21 @@ pub fn new_deduper() -> Deduper {
 pub struct ArchiveWriter {
 	zip: ZipWriter<BufWriter<File>>,
 	zip_options: SimpleFileOptions,
+	output_format: OutputFormat,
 	mappings: Vec<MappingEntry>,
 	stats: ExportStats,
 }
 
 impl ArchiveWriter {
-	pub fn new(zip: ZipWriter<BufWriter<File>>, zip_options: SimpleFileOptions) -> Self {
+	pub fn new(
+		zip: ZipWriter<BufWriter<File>>,
+		zip_options: SimpleFileOptions,
+		output_format: OutputFormat,
+	) -> Self {
 		Self {
 			zip,
 			zip_options,
+			output_format,
 			mappings: Vec::new(),
 			stats: ExportStats::default(),
 		}
@@ -76,10 +85,13 @@ impl ArchiveWriter {
 	pub fn write_output(&mut self, output: IdOutput) -> Result<()> {
 		for entry in output.archive_entries {
 			self.zip
-				.start_file(format!("{}.webp", entry.sha256), self.zip_options)
+				.start_file(
+					format!("{}.{}", entry.sha256, self.output_format.extension()),
+					self.zip_options,
+				)
 				.with_context(|| format!("start zip entry for {}", entry.sha256))?;
 			self.zip
-				.write_all(&entry.webp)
+				.write_all(&entry.data)
 				.with_context(|| format!("write zip entry for {}", entry.sha256))?;
 		}
 
@@ -104,7 +116,12 @@ impl ArchiveWriter {
 	}
 }
 
-pub fn process_id(ironworks: &Ironworks, deduper: &Deduper, id: u32) -> IdOutput {
+pub fn process_id(
+	ironworks: &Ironworks,
+	deduper: &Deduper,
+	output_format: OutputFormat,
+	id: u32,
+) -> IdOutput {
 	let id_string = format!("{id:06}");
 	let mut output = IdOutput {
 		mappings: Vec::new(),
@@ -115,14 +132,26 @@ pub fn process_id(ironworks: &Ironworks, deduper: &Deduper, id: u32) -> IdOutput
 
 	for version in VERSIONS {
 		let base = format!("ui/icon/{}000{version}/{id_string}", &id_string[..3]);
-		process_path(ironworks, deduper, &format!("{base}.tex"), &mut output);
-		process_path(ironworks, deduper, &format!("{base}_hr1.tex"), &mut output);
+		process_path(ironworks, deduper, output_format, &format!("{base}.tex"), &mut output);
+		process_path(
+			ironworks,
+			deduper,
+			output_format,
+			&format!("{base}_hr1.tex"),
+			&mut output,
+		);
 	}
 
 	output
 }
 
-fn process_path(ironworks: &Ironworks, deduper: &Deduper, path: &str, output: &mut IdOutput) {
+fn process_path(
+	ironworks: &Ironworks,
+	deduper: &Deduper,
+	output_format: OutputFormat,
+	path: &str,
+	output: &mut IdOutput,
+) {
 	let data = match ironworks.file::<Vec<u8>>(path) {
 		Ok(data) => data,
 		Err(_) => return,
@@ -135,7 +164,7 @@ fn process_path(ironworks: &Ironworks, deduper: &Deduper, path: &str, output: &m
 		sha256: sha256.clone(),
 	});
 
-	match process_texture(&data, sha256, deduper) {
+	match process_texture(&data, sha256, deduper, output_format) {
 		Ok(ProcessResult::Archived(entry)) => {
 			output.stats.converted += 1;
 			output.stats.archived += 1;
@@ -151,7 +180,12 @@ fn process_path(ironworks: &Ironworks, deduper: &Deduper, path: &str, output: &m
 	}
 }
 
-fn process_texture(data: &[u8], sha256: String, deduper: &Deduper) -> Result<ProcessResult> {
+fn process_texture(
+	data: &[u8],
+	sha256: String,
+	deduper: &Deduper,
+	output_format: OutputFormat,
+) -> Result<ProcessResult> {
 	{
 		let mut hashes = deduper.lock().expect("deduper mutex poisoned");
 		if !hashes.insert(sha256.clone()) {
@@ -159,8 +193,11 @@ fn process_texture(data: &[u8], sha256: String, deduper: &Deduper) -> Result<Pro
 		}
 	}
 
-	let webp = convert_tex_to_webp(data)?;
-	Ok(ProcessResult::Archived(ArchiveEntry { sha256, webp }))
+	let encoded = convert_tex(data, output_format)?;
+	Ok(ProcessResult::Archived(ArchiveEntry {
+		sha256,
+		data: encoded,
+	}))
 }
 
 enum ProcessResult {

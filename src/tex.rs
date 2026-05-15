@@ -1,9 +1,11 @@
 use anyhow::{Context, Result, anyhow, bail};
 use ironworks::file::tex::Format;
+use ravif::{Encoder as AvifEncoder, RGBA8 as AvifRgba8};
+use rgb::FromSlice;
 use texture2ddecoder::{decode_bc1, decode_bc3, decode_bc7};
 use webp::Encoder;
 
-use crate::config::WEBP_QUALITY;
+use crate::config::{AVIF_QUALITY, OutputFormat, WEBP_QUALITY};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -62,12 +64,30 @@ impl TextureHeader {
 	}
 }
 
-pub fn convert_tex_to_webp(data: &[u8]) -> Result<Vec<u8>> {
+pub fn convert_tex(data: &[u8], output_format: OutputFormat) -> Result<Vec<u8>> {
 	let header = TextureHeader::parse(data)?;
 	let rgba = decode_tex_rgba(data, header)?;
-	let webp = Encoder::from_rgba(&rgba, u32::from(header.width), u32::from(header.height))
-		.encode(WEBP_QUALITY);
-	Ok(webp.to_vec())
+
+	match output_format {
+		OutputFormat::Webp => {
+			let webp = Encoder::from_rgba(&rgba, u32::from(header.width), u32::from(header.height))
+				.encode(WEBP_QUALITY);
+			Ok(webp.to_vec())
+		}
+		OutputFormat::Avif => encode_avif(&rgba, header),
+	}
+}
+
+fn encode_avif(rgba: &[u8], header: TextureHeader) -> Result<Vec<u8>> {
+	let width = usize::from(header.width);
+	let height = usize::from(header.height);
+	let pixels: Vec<AvifRgba8> = rgba.as_rgba().to_vec();
+	let image = ravif::Img::new(pixels.as_slice(), width, height);
+	let encoded = AvifEncoder::new()
+		.with_quality(AVIF_QUALITY)
+		.encode_rgba(image)
+		.map_err(|error| anyhow!("avif encode failed: {error}"))?;
+	Ok(encoded.avif_file)
 }
 
 fn decode_tex_rgba(data: &[u8], header: TextureHeader) -> Result<Vec<u8>> {
