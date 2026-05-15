@@ -31,7 +31,7 @@ fn main() -> Result<()> {
 	let install_root = resolve_install_root()
 		.context("could not determine FFXIV install path from argv[1], current working directory, or known global install paths")?;
 
-	let ui_output_dir = output_root().join("ui");
+	let ui_output_dir = output_root();
 	fs::create_dir_all(&ui_output_dir)
 		.with_context(|| format!("create output dir {}", ui_output_dir.display()))?;
 
