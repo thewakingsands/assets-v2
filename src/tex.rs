@@ -7,6 +7,13 @@ use webp::Encoder;
 
 use crate::config::{AVIF_QUALITY, OutputFormat, WEBP_QUALITY};
 
+const AUTO_AVIF_MIN_DIMENSION: u16 = 129;
+
+pub struct EncodedTexture {
+	pub data: Vec<u8>,
+	pub format: OutputFormat,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct TextureHeader {
@@ -64,17 +71,42 @@ impl TextureHeader {
 	}
 }
 
-pub fn convert_tex(data: &[u8], output_format: OutputFormat) -> Result<Vec<u8>> {
+pub fn convert_tex(data: &[u8], output_format: OutputFormat) -> Result<EncodedTexture> {
 	let header = TextureHeader::parse(data)?;
 	let rgba = decode_tex_rgba(data, header)?;
+	let chosen_format = choose_output_format(output_format, header);
 
-	match output_format {
+	let data = match chosen_format {
 		OutputFormat::Webp => {
 			let webp = Encoder::from_rgba(&rgba, u32::from(header.width), u32::from(header.height))
 				.encode(WEBP_QUALITY);
-			Ok(webp.to_vec())
+			webp.to_vec()
 		}
-		OutputFormat::Avif => encode_avif(&rgba, header),
+		OutputFormat::Avif => encode_avif(&rgba, header)?,
+		OutputFormat::Auto => unreachable!("auto must resolve to a concrete format"),
+	};
+
+	Ok(EncodedTexture {
+		data,
+		format: chosen_format,
+	})
+}
+
+pub fn decide_output_format(data: &[u8], requested: OutputFormat) -> Result<OutputFormat> {
+	let header = TextureHeader::parse(data)?;
+	Ok(choose_output_format(requested, header))
+}
+
+fn choose_output_format(requested: OutputFormat, header: TextureHeader) -> OutputFormat {
+	match requested {
+		OutputFormat::Webp | OutputFormat::Avif => requested,
+		OutputFormat::Auto => {
+			if header.width >= AUTO_AVIF_MIN_DIMENSION && header.height >= AUTO_AVIF_MIN_DIMENSION {
+				OutputFormat::Avif
+			} else {
+				OutputFormat::Webp
+			}
+		}
 	}
 }
 

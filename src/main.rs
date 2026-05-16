@@ -41,7 +41,7 @@ fn main() -> Result<()> {
 		.with_context(|| format!("create output dir {}", ui_output_dir.display()))?;
 
 	let archive_path = ui_output_dir.join(options.output_format.archive_name());
-	let mapping_path = ui_output_dir.join("icon-path-sha256.json");
+	let mapping_path = ui_output_dir.join("icons.json");
 
 	let total = u64::from(END_ID_EXCLUSIVE - START_ID);
 	let progress = ProgressBar::new(total);

@@ -1,5 +1,5 @@
 use std::{
-	collections::HashSet,
+	collections::HashMap,
 	fs::{self, File},
 	io::{BufWriter, Write},
 	path::{Path, PathBuf},
@@ -14,7 +14,7 @@ use zip::{ZipWriter, write::SimpleFileOptions};
 
 use crate::{
 	config::{OutputFormat, OutputMode, VERSIONS},
-	tex::convert_tex,
+	tex::{convert_tex, decide_output_format},
 };
 
 #[derive(Debug, Serialize)]
@@ -23,6 +23,7 @@ pub struct MappingEntry {
 	version: String,
 	hr: bool,
 	sha256: String,
+	format: String,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -48,6 +49,7 @@ impl ExportStats {
 
 pub struct ArchiveEntry {
 	sha256: String,
+	format: OutputFormat,
 	data: Vec<u8>,
 }
 
@@ -58,10 +60,10 @@ pub struct IdOutput {
 	pub errors: Vec<String>,
 }
 
-pub type Deduper = Arc<Mutex<HashSet<String>>>;
+pub type Deduper = Arc<Mutex<HashMap<String, OutputFormat>>>;
 
 pub fn new_deduper() -> Deduper {
-	Arc::new(Mutex::new(HashSet::new()))
+	Arc::new(Mutex::new(HashMap::new()))
 }
 
 pub enum OutputWriter {
@@ -104,10 +106,9 @@ impl OutputWriter {
 	}
 }
 
-struct ArchiveWriter {
+pub struct ArchiveWriter {
 	zip: ZipWriter<BufWriter<File>>,
 	zip_options: SimpleFileOptions,
-	output_format: OutputFormat,
 	mappings: Vec<MappingEntry>,
 	stats: ExportStats,
 }
@@ -116,12 +117,11 @@ impl ArchiveWriter {
 	fn new(
 		zip: ZipWriter<BufWriter<File>>,
 		zip_options: SimpleFileOptions,
-		output_format: OutputFormat,
+		_output_format: OutputFormat,
 	) -> Self {
 		Self {
 			zip,
 			zip_options,
-			output_format,
 			mappings: Vec::new(),
 			stats: ExportStats::default(),
 		}
@@ -129,7 +129,7 @@ impl ArchiveWriter {
 
 	fn write_output(&mut self, output: IdOutput) -> Result<()> {
 		for entry in output.archive_entries {
-			let relative_path = encoded_relative_path(&entry.sha256, self.output_format);
+			let relative_path = encoded_relative_path(&entry.sha256, entry.format);
 			let zip_path = relative_path.to_string_lossy().replace('\\', "/");
 			self.zip
 				.start_file(zip_path, self.zip_options)
@@ -161,18 +161,16 @@ impl ArchiveWriter {
 	}
 }
 
-struct FileWriter {
+pub struct FileWriter {
 	output_root: PathBuf,
-	output_format: OutputFormat,
 	mappings: Vec<MappingEntry>,
 	stats: ExportStats,
 }
 
 impl FileWriter {
-	fn new(output_root: PathBuf, output_format: OutputFormat) -> Self {
+	fn new(output_root: PathBuf, _output_format: OutputFormat) -> Self {
 		Self {
 			output_root,
-			output_format,
 			mappings: Vec::new(),
 			stats: ExportStats::default(),
 		}
@@ -180,7 +178,7 @@ impl FileWriter {
 
 	fn write_output(&mut self, output: IdOutput) -> Result<()> {
 		for entry in output.archive_entries {
-			let file_path = encoded_full_path(&self.output_root, &entry.sha256, self.output_format);
+			let file_path = encoded_full_path(&self.output_root, &entry.sha256, entry.format);
 			if file_path.exists() {
 				self.stats.skipped_existing += 1;
 				continue;
@@ -273,24 +271,43 @@ impl<'a> ExportProcessor<'a> {
 
 		output.stats.found += 1;
 		let sha256 = hex_sha256(&data);
-		output.mappings.push(MappingEntry {
-			id,
-			version: version.to_owned(),
-			hr,
-			sha256: sha256.clone(),
-		});
 
 		match self.process_texture(&data, &sha256) {
 			Ok(ProcessResult::Archived(entry)) => {
+				output.mappings.push(MappingEntry {
+					id,
+					version: version.to_owned(),
+					hr,
+					sha256: sha256.clone(),
+					format: entry.format.encoded_extension().to_owned(),
+				});
 				output.stats.converted += 1;
 				output.archive_entries.push(entry);
 				true
 			}
 			Ok(ProcessResult::Duplicate) => {
+				output.mappings.push(MappingEntry {
+					id,
+					version: version.to_owned(),
+					hr,
+					sha256: sha256.clone(),
+					format: self
+						.known_format(&sha256)
+						.unwrap_or(OutputFormat::Webp)
+						.encoded_extension()
+						.to_owned(),
+				});
 				output.stats.duplicates += 1;
 				true
 			}
-			Ok(ProcessResult::ExistingFile) => {
+			Ok(ProcessResult::ExistingFile(existing_format)) => {
+				output.mappings.push(MappingEntry {
+					id,
+					version: version.to_owned(),
+					hr,
+					sha256: sha256.clone(),
+					format: existing_format.encoded_extension().to_owned(),
+				});
 				output.stats.skipped_existing += 1;
 				true
 			}
@@ -303,39 +320,51 @@ impl<'a> ExportProcessor<'a> {
 	}
 
 	fn process_texture(&self, data: &[u8], sha256: &str) -> Result<ProcessResult> {
+		let decided_format = decide_output_format(data, self.output_format)?;
+
 		{
 			let mut hashes = self.deduper.lock().expect("deduper mutex poisoned");
-			if !hashes.insert(sha256.to_owned()) {
+			if hashes.contains_key(sha256) {
 				return Ok(ProcessResult::Duplicate);
 			}
+			hashes.insert(sha256.to_owned(), decided_format);
 		}
 
 		if self.output_mode == OutputMode::Files
 			&& let Some(root) = &self.output_root
 		{
-			let file_path = encoded_full_path(root, sha256, self.output_format);
+			let file_path = encoded_full_path(root, sha256, decided_format);
 			if file_path.exists() {
-				return Ok(ProcessResult::ExistingFile);
+				return Ok(ProcessResult::ExistingFile(decided_format));
 			}
 		}
 
-		let encoded = convert_tex(data, self.output_format)?;
+		let encoded = convert_tex(data, decided_format)?;
 		Ok(ProcessResult::Archived(ArchiveEntry {
 			sha256: sha256.to_owned(),
-			data: encoded,
+			format: encoded.format,
+			data: encoded.data,
 		}))
+	}
+
+	fn known_format(&self, sha256: &str) -> Option<OutputFormat> {
+		self.deduper
+			.lock()
+			.expect("deduper mutex poisoned")
+			.get(sha256)
+			.copied()
 	}
 }
 
 enum ProcessResult {
 	Archived(ArchiveEntry),
 	Duplicate,
-	ExistingFile,
+	ExistingFile(OutputFormat),
 }
 
 pub fn encoded_relative_path(sha256: &str, output_format: OutputFormat) -> PathBuf {
 	let shard = &sha256[..sha256.len().min(2)];
-	PathBuf::from(shard).join(format!("{sha256}.{}", output_format.extension()))
+	PathBuf::from(shard).join(format!("{sha256}.{}", output_format.encoded_extension()))
 }
 
 pub fn encoded_full_path(

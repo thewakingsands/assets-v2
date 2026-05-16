@@ -21,6 +21,7 @@ const REQUIRED_INDEX_PATH: &str = r"game\sqpack\ffxiv\060000.win32.index";
 pub enum OutputFormat {
 	Webp,
 	Avif,
+	Auto,
 }
 
 impl OutputFormat {
@@ -28,6 +29,15 @@ impl OutputFormat {
 		match self {
 			Self::Webp => "webp",
 			Self::Avif => "avif",
+			Self::Auto => "auto",
+		}
+	}
+
+	pub fn encoded_extension(self) -> &'static str {
+		match self {
+			Self::Webp => "webp",
+			Self::Avif => "avif",
+			Self::Auto => unreachable!("auto does not have a single encoded extension"),
 		}
 	}
 
@@ -65,8 +75,9 @@ pub fn parse_options() -> anyhow::Result<AppOptions> {
 				output_format = match value.to_string_lossy().to_ascii_lowercase().as_str() {
 					"webp" => OutputFormat::Webp,
 					"avif" => OutputFormat::Avif,
+					"auto" => OutputFormat::Auto,
 					other => anyhow::bail!(
-						"unsupported output format `{other}`; expected `webp` or `avif`"
+						"unsupported output format `{other}`; expected `webp`, `avif`, or `auto`"
 					),
 				};
 			}
@@ -75,8 +86,9 @@ pub fn parse_options() -> anyhow::Result<AppOptions> {
 				output_format = match value {
 					"webp" => OutputFormat::Webp,
 					"avif" => OutputFormat::Avif,
+					"auto" => OutputFormat::Auto,
 					other => anyhow::bail!(
-						"unsupported output format `{other}`; expected `webp` or `avif`"
+						"unsupported output format `{other}`; expected `webp`, `avif`, or `auto`"
 					),
 				};
 			}
