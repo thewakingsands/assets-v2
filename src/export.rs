@@ -118,112 +118,98 @@ impl ArchiveWriter {
 	}
 }
 
-pub fn process_id(
-	ironworks: &Ironworks,
-	deduper: &Deduper,
+pub struct ExportProcessor<'a> {
+	ironworks: &'a Ironworks,
+	deduper: &'a Deduper,
 	output_format: OutputFormat,
-	id: u32,
-) -> IdOutput {
-	let mut output = IdOutput {
-		mappings: Vec::new(),
-		archive_entries: Vec::new(),
-		stats: ExportStats::default(),
-		errors: Vec::new(),
-	};
+}
 
-	for version in VERSIONS {
-		let has_hr = process_path(
-			ironworks, 
-			deduper, 
+impl<'a> ExportProcessor<'a> {
+	pub fn new(
+		ironworks: &'a Ironworks,
+		deduper: &'a Deduper,
+		output_format: OutputFormat,
+	) -> Self {
+		Self {
+			ironworks,
+			deduper,
 			output_format,
-			&id,
-			&version,
-			true,
-			&mut output
-		);
-
-		if !has_hr {
-			process_path(
-				ironworks,
-				deduper,
-				output_format,
-				&id,
-				&version,
-				false,
-				&mut output,
-			);
 		}
 	}
 
-	output
-}
+	pub fn process_id(&self, id: u32) -> IdOutput {
+		let mut output = IdOutput {
+			mappings: Vec::new(),
+			archive_entries: Vec::new(),
+			stats: ExportStats::default(),
+			errors: Vec::new(),
+		};
 
-fn process_path(
-	ironworks: &Ironworks,
-	deduper: &Deduper,
-	output_format: OutputFormat,
-	id: &u32,
-	version: &str,
-	hr: bool,
-	output: &mut IdOutput,
-) -> bool {
-	let suffix = match hr {
-		true => "_hr1.tex",
-		false => ".tex"
-	};
-	let id_string = format!("{id:06}");
-	let path = format!("ui/icon/{}000{version}/{id_string}{suffix}", &id_string[..3]);
-	let data = match ironworks.file::<Vec<u8>>(&path) {
-		Ok(data) => data,
-		Err(_) => return false,
-	};
+		for version in VERSIONS {
+			let has_hr = self.process_path(id, version, true, &mut output);
 
-	output.stats.found += 1;
-	let sha256 = hex_sha256(&data);
-	output.mappings.push(MappingEntry {
-		id: id.to_owned(),
-		version: version.to_owned(),
-		hr: hr,
-		sha256: sha256.clone(),
-	});
+			if !has_hr {
+				self.process_path(id, version, false, &mut output);
+			}
+		}
 
-	match process_texture(&data, sha256, deduper, output_format) {
-		Ok(ProcessResult::Archived(entry)) => {
-			output.stats.converted += 1;
-			output.stats.archived += 1;
-			output.archive_entries.push(entry);
-			return true
-		}
-		Ok(ProcessResult::Duplicate) => {
-			output.stats.duplicates += 1;
-			return true
-		}
-		Err(error) => {
-			output.stats.errors += 1;
-			output.errors.push(format!("{path}: {error:#}"));
-			return false
-		}
+		output
 	}
-}
 
-fn process_texture(
-	data: &[u8],
-	sha256: String,
-	deduper: &Deduper,
-	output_format: OutputFormat,
-) -> Result<ProcessResult> {
-	{
-		let mut hashes = deduper.lock().expect("deduper mutex poisoned");
-		if !hashes.insert(sha256.clone()) {
-			return Ok(ProcessResult::Duplicate);
+	fn process_path(&self, id: u32, version: &str, hr: bool, output: &mut IdOutput) -> bool {
+		let suffix = match hr {
+			true => "_hr1.tex",
+			false => ".tex",
+		};
+		let id_string = format!("{id:06}");
+		let path = format!("ui/icon/{}000{version}/{id_string}{suffix}", &id_string[..3]);
+		let data = match self.ironworks.file::<Vec<u8>>(&path) {
+			Ok(data) => data,
+			Err(_) => return false,
+		};
+
+		output.stats.found += 1;
+		let sha256 = hex_sha256(&data);
+		output.mappings.push(MappingEntry {
+			id,
+			version: version.to_owned(),
+			hr,
+			sha256: sha256.clone(),
+		});
+
+		match self.process_texture(&data, sha256) {
+			Ok(ProcessResult::Archived(entry)) => {
+				output.stats.converted += 1;
+				output.stats.archived += 1;
+				output.archive_entries.push(entry);
+				true
+			}
+			Ok(ProcessResult::Duplicate) => {
+				output.stats.duplicates += 1;
+				true
+			}
+			Err(error) => {
+				output.stats.errors += 1;
+				output.errors.push(format!("{path}: {error:#}"));
+				false
+			}
 		}
 	}
 
-	let encoded = convert_tex(data, output_format)?;
-	Ok(ProcessResult::Archived(ArchiveEntry {
-		sha256,
-		data: encoded,
-	}))
+	fn process_texture(&self, data: &[u8], sha256: String) -> Result<ProcessResult> {
+		{
+			let mut hashes = self.deduper.lock().expect("deduper mutex poisoned");
+			if !hashes.insert(sha256.clone()) {
+				return Ok(ProcessResult::Duplicate);
+			}
+		}
+
+		let encoded = convert_tex(data, self.output_format)?;
+		Ok(ProcessResult::Archived(ArchiveEntry {
+			sha256,
+			data: encoded,
+		}))
+	}
 }
 
 enum ProcessResult {

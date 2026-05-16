@@ -25,7 +25,7 @@ use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
 	config::{END_ID_EXCLUSIVE, START_ID, output_root, parse_options, resolve_install_root},
-	export::{ArchiveWriter, new_deduper, process_id},
+	export::{ArchiveWriter, ExportProcessor, new_deduper},
 };
 
 fn main() -> Result<()> {
@@ -80,6 +80,7 @@ fn main() -> Result<()> {
 
 		workers.push(thread::spawn(move || {
 			let ironworks = create_ironworks(&install_root);
+			let processor = ExportProcessor::new(&ironworks, &deduper, output_format);
 
 			loop {
 				let id = next_id.fetch_add(1, Ordering::Relaxed);
@@ -88,7 +89,7 @@ fn main() -> Result<()> {
 				}
 
 				if sender
-					.send(process_id(&ironworks, &deduper, output_format, id))
+					.send(processor.process_id(id))
 					.is_err()
 				{
 					break;
