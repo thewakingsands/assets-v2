@@ -36,15 +36,23 @@ impl OutputFormat {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputMode {
+	Archive,
+	Files,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppOptions {
 	pub install_root: Option<PathBuf>,
 	pub output_format: OutputFormat,
+	pub output_mode: OutputMode,
 }
 
 pub fn parse_options() -> anyhow::Result<AppOptions> {
 	let mut install_root = None;
 	let mut output_format = OutputFormat::Webp;
+	let mut output_mode = OutputMode::Archive;
 	let mut args = env::args_os().skip(1);
 
 	while let Some(arg) = args.next() {
@@ -72,6 +80,32 @@ pub fn parse_options() -> anyhow::Result<AppOptions> {
 					),
 				};
 			}
+			Some("--output-mode") => {
+				let Some(value) = args.next() else {
+					anyhow::bail!("missing value for --output-mode");
+				};
+
+				output_mode = match value.to_string_lossy().to_ascii_lowercase().as_str() {
+					"archive" => OutputMode::Archive,
+					"files" => OutputMode::Files,
+					other => anyhow::bail!(
+						"unsupported output mode `{other}`; expected `archive` or `files`"
+					),
+				};
+			}
+			Some(flag) if flag.starts_with("--output-mode=") => {
+				let value = &flag["--output-mode=".len()..];
+				output_mode = match value {
+					"archive" => OutputMode::Archive,
+					"files" => OutputMode::Files,
+					other => anyhow::bail!(
+						"unsupported output mode `{other}`; expected `archive` or `files`"
+					),
+				};
+			}
+			Some("--no-archive") => {
+				output_mode = OutputMode::Files;
+			}
 			Some(other) if other.starts_with("--") => {
 				anyhow::bail!("unsupported option `{other}`");
 			}
@@ -87,6 +121,7 @@ pub fn parse_options() -> anyhow::Result<AppOptions> {
 	Ok(AppOptions {
 		install_root,
 		output_format,
+		output_mode,
 	})
 }
 

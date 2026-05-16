@@ -24,8 +24,10 @@ use ironworks::{
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
-	config::{END_ID_EXCLUSIVE, START_ID, output_root, parse_options, resolve_install_root},
-	export::{ArchiveWriter, ExportProcessor, new_deduper},
+	config::{
+		END_ID_EXCLUSIVE, OutputMode, START_ID, output_root, parse_options, resolve_install_root,
+	},
+	export::{ExportProcessor, OutputWriter, new_deduper},
 };
 
 fn main() -> Result<()> {
@@ -41,18 +43,6 @@ fn main() -> Result<()> {
 	let archive_path = ui_output_dir.join(options.output_format.archive_name());
 	let mapping_path = ui_output_dir.join("icon-path-sha256.json");
 
-	if archive_path.exists() {
-		fs::remove_file(&archive_path)
-			.with_context(|| format!("remove existing archive {}", archive_path.display()))?;
-	}
-
-	let archive_file = File::create(&archive_path)
-		.with_context(|| format!("create archive {}", archive_path.display()))?;
-	let writer = BufWriter::new(archive_file);
-	let zip = ZipWriter::new(writer);
-	let zip_options =
-		SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-
 	let total = u64::from(END_ID_EXCLUSIVE - START_ID);
 	let progress = ProgressBar::new(total);
 	progress.set_style(
@@ -62,7 +52,23 @@ fn main() -> Result<()> {
 		.progress_chars("=>-"),
 	);
 
-	let mut archive = ArchiveWriter::new(zip, zip_options, options.output_format);
+	let mut writer = match options.output_mode {
+		OutputMode::Archive => {
+			if archive_path.exists() {
+				fs::remove_file(&archive_path).with_context(|| {
+					format!("remove existing archive {}", archive_path.display())
+				})?;
+			}
+
+			let archive_file = File::create(&archive_path)
+				.with_context(|| format!("create archive {}", archive_path.display()))?;
+			let zip = ZipWriter::new(BufWriter::new(archive_file));
+			let zip_options =
+				SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+			OutputWriter::archive(zip, zip_options, options.output_format)
+		}
+		OutputMode::Files => OutputWriter::files(ui_output_dir.clone(), options.output_format),
+	};
 	let worker_count = thread::available_parallelism()
 		.map(|parallelism| parallelism.get())
 		.unwrap_or(1);
@@ -76,11 +82,17 @@ fn main() -> Result<()> {
 		let next_id = Arc::clone(&next_id);
 		let deduper = Arc::clone(&deduper);
 		let output_format = options.output_format;
+		let output_mode = options.output_mode;
+		let output_root = match output_mode {
+			OutputMode::Archive => None,
+			OutputMode::Files => Some(ui_output_dir.clone()),
+		};
 		let sender = sender.clone();
 
 		workers.push(thread::spawn(move || {
 			let ironworks = create_ironworks(&install_root);
-			let processor = ExportProcessor::new(&ironworks, &deduper, output_format);
+			let processor =
+				ExportProcessor::new(&ironworks, &deduper, output_format, output_mode, output_root);
 
 			loop {
 				let id = next_id.fetch_add(1, Ordering::Relaxed);
@@ -103,13 +115,18 @@ fn main() -> Result<()> {
 		let output = receiver
 			.recv()
 			.context("worker channel closed before all ids were processed")?;
-		archive.write_output(output)?;
-		let stats = archive.stats();
+		writer.write_output(output)?;
+		let stats = writer.stats();
 
 		progress.inc(1);
 		progress.set_message(format!(
-			"found:{} converted:{} archived:{} dup:{} err:{}",
-			stats.found, stats.converted, stats.archived, stats.duplicates, stats.errors,
+			"found:{} converted:{} archived:{} dup:{} exists:{} err:{}",
+			stats.found,
+			stats.converted,
+			stats.archived,
+			stats.duplicates,
+			stats.skipped_existing,
+			stats.errors,
 		));
 	}
 
@@ -119,11 +136,16 @@ fn main() -> Result<()> {
 		})?;
 	}
 
-	let (_writer, mappings, stats) = archive.finish()?;
+	let (mappings, stats) = writer.finish()?;
 
 	progress.finish_with_message(format!(
-		"found:{} converted:{} archived:{} dup:{} err:{}",
-		stats.found, stats.converted, stats.archived, stats.duplicates, stats.errors,
+		"found:{} converted:{} archived:{} dup:{} exists:{} err:{}",
+		stats.found,
+		stats.converted,
+		stats.archived,
+		stats.duplicates,
+		stats.skipped_existing,
+		stats.errors,
 	));
 
 	let mapping_json =
@@ -131,7 +153,10 @@ fn main() -> Result<()> {
 	fs::write(&mapping_path, [&mapping_json[..], b"\n"].concat())
 		.with_context(|| format!("write mapping {}", mapping_path.display()))?;
 
-	println!("archive: {}", archive_path.display());
+	match options.output_mode {
+		OutputMode::Archive => println!("archive: {}", archive_path.display()),
+		OutputMode::Files => println!("files: {}", ui_output_dir.display()),
+	}
 	println!("mapping: {}", mapping_path.display());
 	println!("elapsed: {}", format_elapsed(started_at.elapsed()));
 
