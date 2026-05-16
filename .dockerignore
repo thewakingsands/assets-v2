@@ -1,0 +1,6 @@
+.git
+.github
+.vscode
+target
+outputs
+crates/exporter/target
