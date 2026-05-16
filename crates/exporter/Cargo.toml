@@ -1,0 +1,17 @@
+[package]
+name = "assets-v2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+indicatif = "0.18.0"
+ironworks = { git = "https://github.com/zhyupe/ironworks.git", rev = "f6dd285", features = ["sqpack", "tex"] }
+ravif = "0.11.20"
+rgb = "0.8.52"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+sha2 = "0.10.9"
+texture2ddecoder = "0.1.2"
+webp = "0.3.1"
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
