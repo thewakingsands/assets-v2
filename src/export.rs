@@ -18,7 +18,9 @@ use crate::{
 
 #[derive(Debug, Serialize)]
 pub struct MappingEntry {
-	path: String,
+	id: u32,
+	version: String,
+	hr: bool,
 	sha256: String,
 }
 
@@ -122,7 +124,6 @@ pub fn process_id(
 	output_format: OutputFormat,
 	id: u32,
 ) -> IdOutput {
-	let id_string = format!("{id:06}");
 	let mut output = IdOutput {
 		mappings: Vec::new(),
 		archive_entries: Vec::new(),
@@ -131,15 +132,27 @@ pub fn process_id(
 	};
 
 	for version in VERSIONS {
-		let base = format!("ui/icon/{}000{version}/{id_string}", &id_string[..3]);
-		process_path(ironworks, deduper, output_format, &format!("{base}.tex"), &mut output);
-		process_path(
-			ironworks,
-			deduper,
+		let has_hr = process_path(
+			ironworks, 
+			deduper, 
 			output_format,
-			&format!("{base}_hr1.tex"),
-			&mut output,
+			&id,
+			&version,
+			true,
+			&mut output
 		);
+
+		if !has_hr {
+			process_path(
+				ironworks,
+				deduper,
+				output_format,
+				&id,
+				&version,
+				false,
+				&mut output,
+			);
+		}
 	}
 
 	output
@@ -149,18 +162,28 @@ fn process_path(
 	ironworks: &Ironworks,
 	deduper: &Deduper,
 	output_format: OutputFormat,
-	path: &str,
+	id: &u32,
+	version: &str,
+	hr: bool,
 	output: &mut IdOutput,
-) {
-	let data = match ironworks.file::<Vec<u8>>(path) {
+) -> bool {
+	let suffix = match hr {
+		true => "_hr1.tex",
+		false => ".tex"
+	};
+	let id_string = format!("{id:06}");
+	let path = format!("ui/icon/{}000{version}/{id_string}{suffix}", &id_string[..3]);
+	let data = match ironworks.file::<Vec<u8>>(&path) {
 		Ok(data) => data,
-		Err(_) => return,
+		Err(_) => return false,
 	};
 
 	output.stats.found += 1;
 	let sha256 = hex_sha256(&data);
 	output.mappings.push(MappingEntry {
-		path: path.to_owned(),
+		id: id.to_owned(),
+		version: version.to_owned(),
+		hr: hr,
 		sha256: sha256.clone(),
 	});
 
@@ -169,13 +192,16 @@ fn process_path(
 			output.stats.converted += 1;
 			output.stats.archived += 1;
 			output.archive_entries.push(entry);
+			return true
 		}
 		Ok(ProcessResult::Duplicate) => {
 			output.stats.duplicates += 1;
+			return true
 		}
 		Err(error) => {
 			output.stats.errors += 1;
 			output.errors.push(format!("{path}: {error:#}"));
+			return false
 		}
 	}
 }
