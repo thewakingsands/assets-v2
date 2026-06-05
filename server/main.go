@@ -25,7 +25,6 @@ import (
 var (
 	iconRoutePattern = regexp.MustCompile(`^/i/\d{6}/(\d{6})(_hr1)?\.png$`)
 	apiPathPattern   = regexp.MustCompile(`^ui/icon/\d{6}/(\d{6})(_hr1)?\.tex$`)
-	assetPattern     = regexp.MustCompile(`^/assets/([0-9a-f]{64})\.([a-z0-9]+)$`)
 )
 
 type iconRecord struct {
@@ -93,7 +92,6 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/assets/", srv.handleAsset)
 	mux.HandleFunc("/i/", srv.handleIcon)
 	mux.HandleFunc("/api/asset", srv.handleAPIAsset)
 
@@ -225,16 +223,8 @@ func (s *objectStore) readIndex(ctx context.Context, version string) ([]byte, er
 	return data, nil
 }
 
-func (s *server) handleAsset(w http.ResponseWriter, r *http.Request) {
-	matches := assetPattern.FindStringSubmatch(r.URL.Path)
-	if matches == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	sha256 := matches[1]
-	ext := matches[2]
-	relativePath := assetPath(sha256, ext)
+func (s *server) serveAsset(w http.ResponseWriter, r *http.Request, ref assetRef) {
+	relativePath := assetPath(ref.SHA256, ref.Format)
 
 	if s.store.cacheDir != "" {
 		path := filepath.Join(s.store.cacheDir, filepath.FromSlash(relativePath))
@@ -269,12 +259,12 @@ func (s *server) handleAsset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if contentType == "" {
-		contentType = contentTypeForExt(ext)
+		contentType = contentTypeForExt(ref.Format)
 	}
 	if contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
-	http.ServeContent(w, r, sha256+"."+ext, time.Now(), bytes.NewReader(data))
+	http.ServeContent(w, r, ref.SHA256+"."+ref.Format, time.Now(), bytes.NewReader(data))
 }
 
 func (s *server) handleIcon(w http.ResponseWriter, r *http.Request) {
@@ -296,7 +286,7 @@ func (s *server) handleIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, assetURL(ref), http.StatusFound)
+	s.serveAsset(w, r, ref)
 }
 
 func (s *server) handleAPIAsset(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +319,7 @@ func (s *server) handleAPIAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, assetURL(ref), http.StatusFound)
+	s.serveAsset(w, r, ref)
 }
 
 func (s *objectStore) readObject(ctx context.Context, relativePath string) ([]byte, string, error) {
@@ -358,10 +348,6 @@ func (s *objectStore) objectName(relativePath string) string {
 
 func (s *objectStore) pathPrefix() string {
 	return joinStorageSegments(s.prefix, "ui", s.server)
-}
-
-func assetURL(ref assetRef) string {
-	return fmt.Sprintf("/assets/%s.%s", ref.SHA256, ref.Format)
 }
 
 func assetPath(sha256 string, ext string) string {
