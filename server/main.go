@@ -94,6 +94,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/i/", srv.handleIcon)
 	mux.HandleFunc("/api/asset", srv.handleAPIAsset)
+	handler := withCORS(mux)
 
 	log.Printf("serving assets from minio bucket %s under %s", store.bucket, store.pathPrefix())
 	if store.cacheDir != "" {
@@ -101,7 +102,22 @@ func main() {
 	}
 	log.Printf("loaded %d icon mappings from %s", len(iconMap), version)
 	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func newObjectStore() (*objectStore, error) {
